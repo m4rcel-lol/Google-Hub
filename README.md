@@ -2,19 +2,52 @@
 <img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
 </div>
 
-# Run and deploy your AI Studio app
+# Google Hub
 
-This contains everything you need to run your app locally.
+A Google-inspired dark UI for browsing public repositories across GitHub/Gitea/Forgejo-compatible instances.
 
-View your app in AI Studio: https://ai.studio/apps/c8bd1932-bea5-4f8a-9799-1e8feff1bc2d
+## Local development
 
-## Run Locally
-
-**Prerequisites:**  Node.js
-
+**Prerequisites:** Node.js 20+
 
 1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+   ```bash
+   npm install
+   ```
+2. Start the dev server:
+   ```bash
+   npm run dev
+   ```
+3. Build production assets:
+   ```bash
+   npm run build
+   ```
+
+## Deploy to Cloudflare Pages
+
+This project is configured for static deployment on Cloudflare Pages.
+
+### Option A: Cloudflare Dashboard (Git integration)
+
+- **Framework preset:** `Vite`
+- **Build command:** `npm run build`
+- **Build output directory:** `dist`
+
+The `public/_redirects` file is included so SPA routes correctly fall back to `index.html`.
+
+### Option B: Wrangler CLI
+
+1. Install Wrangler:
+   ```bash
+   npm install -D wrangler
+   ```
+2. Build the app:
+   ```bash
+   npm run build
+   ```
+3. Deploy:
+   ```bash
+   npx wrangler pages deploy dist
+   ```
+
+The repository includes `wrangler.toml` with `pages_build_output_dir = "dist"` for Cloudflare Pages compatibility.
