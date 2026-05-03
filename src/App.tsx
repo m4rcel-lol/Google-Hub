@@ -39,8 +39,6 @@ import { motion, AnimatePresence } from 'motion/react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
-import SyntaxHighlighter from 'react-syntax-highlighter';
-import { atomOneDark } from 'react-syntax-highlighter/dist/esm/styles/hljs';
 
 const fetchJson = async (url: string) => {
   const res = await fetch(url);
@@ -564,16 +562,13 @@ const MainContent = ({
           code: ({node, inline, className, children, ...props}: any) => {
             const match = /language-(\w+)/.exec(className || '');
             return !inline && match ? (
-              <div className="mb-4 rounded-md border border-google-gray-200 overflow-hidden text-[13px] bg-google-gray-50">
-                <SyntaxHighlighter
-                  style={atomOneDark as any}
-                  language={match[1]}
-                  PreTag="div"
-                  customStyle={{ margin: 0, background: 'transparent' }}
-                  {...props}
-                >
-                  {String(children).replace(/\n$/, '')}
-                </SyntaxHighlighter>
+              <div className="mb-4 rounded-md border border-google-gray-200 overflow-hidden text-[13px]">
+                <div className="px-3 py-1.5 bg-google-gray-100 border-b border-google-gray-200 text-[11px] font-semibold uppercase tracking-wide text-google-gray-600">
+                  {match[1]}
+                </div>
+                <pre className="p-4 overflow-x-auto bg-google-gray-50 text-google-gray-800 font-mono leading-relaxed" {...props}>
+                  <code>{String(children).replace(/\n$/, '')}</code>
+                </pre>
               </div>
             ) : (
               <code className={`${inline ? 'px-1.5 py-0.5 rounded-md bg-google-gray-100 text-[13px] font-mono break-words' : 'block bg-google-gray-50 p-4 rounded-md overflow-x-auto text-[13px] font-mono break-all mb-4'}`} {...props}>
