@@ -37,17 +37,19 @@ The `public/_redirects` file is included so SPA routes correctly fall back to `i
 
 ### Option B: Wrangler CLI
 
-1. Install Wrangler:
-   ```bash
-   npm install -D wrangler
-   ```
-2. Build the app:
+Wrangler is included as a devDependency, so it is available after `npm install`.
+
+1. Build the app:
    ```bash
    npm run build
    ```
-3. Deploy:
+2. Deploy (Pages mode):
    ```bash
-   npx wrangler pages deploy dist
+   npm run deploy:pages
+   ```
+3. Deploy (Workers static-assets mode, compatible with `wrangler deploy`):
+   ```bash
+   npm run deploy:workers
    ```
 
-The repository includes `wrangler.toml` with `pages_build_output_dir = "dist"` for Cloudflare Pages compatibility.
+The repository includes `wrangler.toml` with both `pages_build_output_dir = "dist"` and an `[assets]` section, so either deploy command works once `dist` is built.
