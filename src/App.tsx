@@ -41,7 +41,7 @@ import {
   Github,
   Package,
 } from "lucide-react";
-import { useState, useEffect } from "react";
+import { useState, useEffect, type FormEvent } from "react";
 
 import { motion, AnimatePresence } from "motion/react";
 import Markdown from "react-markdown";
@@ -50,21 +50,36 @@ import rehypeRaw from "rehype-raw";
 import SyntaxHighlighter from "react-syntax-highlighter";
 import { atomOneDark } from "react-syntax-highlighter/dist/esm/styles/hljs";
 
-const fetchJson = async (url: string) => {
-  const proxiedUrl = `/api/proxy?url=${encodeURIComponent(url)}`;
+const LOCAL_API_URL = "/api/v1";
+
+const isExternalUrl = (url: string) => /^https?:\/\//i.test(url);
+
+const requestUrl = (url: string) => {
+  if (!isExternalUrl(url)) return url;
+  const parsed = new URL(url);
+  if (parsed.origin === window.location.origin) {
+    return `${parsed.pathname}${parsed.search}`;
+  }
+  return `/api/proxy?url=${encodeURIComponent(url)}`;
+};
+
+const authHeaders = (adminToken: string) =>
+  adminToken.trim()
+    ? { Authorization: `Bearer ${adminToken.trim()}` }
+    : {};
+
+const fetchJson = async (url: string, init: RequestInit = {}) => {
+  const proxiedUrl = requestUrl(url);
   let res;
   try {
-    res = await fetch(proxiedUrl);
+    res = await fetch(proxiedUrl, init);
   } catch (err: any) {
     throw new Error(`Connection error on ${proxiedUrl}: ${err.message}`);
   }
   const text = await res.text();
+  let data: any;
   try {
-    const data = JSON.parse(text);
-    if (!res.ok && res.status !== 403 && res.status !== 404) {
-      throw new Error(`Failed to fetch: ${res.status} ${data.message || ""}`);
-    }
-    return data;
+    data = JSON.parse(text);
   } catch (e: any) {
     if (!res.ok) {
       // Return a structured error object if not JSON, instead of throwing generic errors that look like unresolved crashes
@@ -72,6 +87,23 @@ const fetchJson = async (url: string) => {
     }
     return { message: "Invalid JSON response", type: "error" };
   }
+  const method = init.method?.toUpperCase() || "GET";
+  if (!res.ok && (method !== "GET" || (res.status !== 403 && res.status !== 404))) {
+    throw new Error(`Failed to fetch: ${res.status} ${data.message || ""}`);
+  }
+  return data;
+};
+
+const fetchText = async (url: string) => {
+  const res = await fetch(requestUrl(url));
+  if (!res.ok) throw new Error(`Failed to fetch text: ${res.status}`);
+  return res.text();
+};
+
+const decodeBase64Utf8 = (value: string) => {
+  const binary = atob(value.replace(/\s/g, ""));
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
 };
 
 const GoogleLogo = () => (
@@ -85,14 +117,149 @@ const GoogleLogo = () => (
   </div>
 );
 
-const LandingPage = ({ onSearch }: { onSearch: (val: string) => void }) => {
+const CreateRepositoryForm = ({
+  adminToken,
+  onAdminTokenChange,
+  onCreated,
+}: {
+  adminToken: string;
+  onAdminTokenChange: (value: string) => void;
+  onCreated: (owner: string, repo: string) => void;
+}) => {
+  const [owner, setOwner] = useState("main");
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [isCreating, setIsCreating] = useState(false);
+  const [message, setMessage] = useState("");
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setMessage("");
+    setIsCreating(true);
+
+    try {
+      const repo = await fetchJson(`${LOCAL_API_URL}/repos`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...authHeaders(adminToken),
+        },
+        body: JSON.stringify({
+          owner: owner.trim(),
+          name: name.trim(),
+          description: description.trim(),
+        }),
+      });
+      onCreated(repo.owner.login, repo.name);
+    } catch (error: any) {
+      setMessage(error.message || "Could not create repository.");
+    } finally {
+      setIsCreating(false);
+    }
+  };
+
+  return (
+    <form onSubmit={submit} className="border border-google-gray-200 bg-white rounded-xl p-4 shadow-sm">
+      <div className="flex items-center gap-2 mb-4">
+        <Plus className="w-5 h-5 text-google-blue-600" />
+        <h2 className="text-base font-semibold text-google-gray-800">
+          Create Repository
+        </h2>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <label className="block">
+          <span className="text-xs font-semibold text-google-gray-500 uppercase tracking-wide">
+            Owner
+          </span>
+          <input
+            value={owner}
+            onChange={(event) => setOwner(event.target.value)}
+            required
+            pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,63}"
+            className="mt-1 w-full rounded-md border border-google-gray-200 bg-google-gray-50 px-3 py-2 text-sm text-google-gray-800 outline-none focus:border-google-blue-600"
+          />
+        </label>
+        <label className="block">
+          <span className="text-xs font-semibold text-google-gray-500 uppercase tracking-wide">
+            Name
+          </span>
+          <input
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            required
+            pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,63}"
+            placeholder="project"
+            className="mt-1 w-full rounded-md border border-google-gray-200 bg-google-gray-50 px-3 py-2 text-sm text-google-gray-800 outline-none focus:border-google-blue-600"
+          />
+        </label>
+      </div>
+      <label className="block mt-3">
+        <span className="text-xs font-semibold text-google-gray-500 uppercase tracking-wide">
+          Description
+        </span>
+        <input
+          value={description}
+          onChange={(event) => setDescription(event.target.value)}
+          maxLength={500}
+          className="mt-1 w-full rounded-md border border-google-gray-200 bg-google-gray-50 px-3 py-2 text-sm text-google-gray-800 outline-none focus:border-google-blue-600"
+        />
+      </label>
+      <label className="block mt-3">
+        <span className="text-xs font-semibold text-google-gray-500 uppercase tracking-wide">
+          Admin Token
+        </span>
+        <input
+          value={adminToken}
+          onChange={(event) => onAdminTokenChange(event.target.value)}
+          type="password"
+          autoComplete="current-password"
+          className="mt-1 w-full rounded-md border border-google-gray-200 bg-google-gray-50 px-3 py-2 text-sm text-google-gray-800 outline-none focus:border-google-blue-600"
+        />
+      </label>
+      {message && <div className="mt-3 text-sm text-google-red">{message}</div>}
+      <button
+        type="submit"
+        disabled={isCreating}
+        className="mt-4 inline-flex items-center justify-center rounded-md bg-google-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-google-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        <Plus className="w-4 h-4 mr-2" />
+        {isCreating ? "Creating..." : "Create"}
+      </button>
+    </form>
+  );
+};
+
+const LandingPage = ({
+  onSearch,
+  adminToken,
+  onAdminTokenChange,
+}: {
+  onSearch: (val: string) => void;
+  adminToken: string;
+  onAdminTokenChange: (value: string) => void;
+}) => {
   const [val, setVal] = useState("");
+  const [localRepos, setLocalRepos] = useState<any[]>([]);
+  const [loadingRepos, setLoadingRepos] = useState(true);
+
+  const loadRepos = () => {
+    setLoadingRepos(true);
+    fetchJson(`${LOCAL_API_URL}/repos`)
+      .then((data) => setLocalRepos(Array.isArray(data) ? data : []))
+      .catch(() => setLocalRepos([]))
+      .finally(() => setLoadingRepos(false));
+  };
+
+  useEffect(() => {
+    loadRepos();
+  }, []);
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -20 }}
-      className="flex-1 flex flex-col items-center justify-start p-6 md:p-8 min-h-full max-w-5xl mx-auto w-full pt-12 md:pt-20"
+      className="flex-1 flex flex-col items-center justify-start p-6 md:p-8 min-h-full max-w-6xl mx-auto w-full pt-8 md:pt-12"
     >
       <div className="w-full text-center space-y-6">
         <div className="flex justify-center mb-8">
@@ -107,12 +274,12 @@ const LandingPage = ({ onSearch }: { onSearch: (val: string) => void }) => {
           </div>
         </div>
         <h1 className="text-3xl md:text-4xl font-bold text-google-gray-800 tracking-tight">
-          A clean perspective on Git repositories
+          Lightweight self-hosted Git
         </h1>
         <p className="text-google-gray-500 text-base md:text-lg max-w-2xl mx-auto leading-relaxed">
-          Search for any public repository, user, or organization on GitHub,
-          Gitea, Forgejo, or Codeberg. View source code, issues, and activity
-          through a focused interface with Google-inspired aesthetics.
+          Host bare repositories, browse code, and use standard Git over HTTPS.
+          External GitHub and Gitea-style repositories can still be opened for
+          read-only browsing.
         </p>
 
         <form
@@ -128,7 +295,7 @@ const LandingPage = ({ onSearch }: { onSearch: (val: string) => void }) => {
               type="text"
               value={val}
               onChange={(e) => setVal(e.target.value)}
-              placeholder="Search e.g., facebook/react or https://codeberg.org/..."
+              placeholder="Open local owner/repo or github: facebook/react"
               className="flex-1 bg-transparent border-none outline-none px-4 text-[15px] md:text-[16px] text-google-gray-800 placeholder-google-gray-400 w-full min-w-0"
             />
             <button
@@ -141,84 +308,85 @@ const LandingPage = ({ onSearch }: { onSearch: (val: string) => void }) => {
         </form>
       </div>
 
-      <div className="mt-16 w-full max-w-4xl grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
-        <div
-          className="bg-white border border-google-gray-200 p-6 rounded-2xl shadow-sm hover:shadow-md transition-shadow cursor-pointer text-left flex flex-col group"
-          onClick={() => onSearch("facebook/react")}
-        >
-          <div className="w-10 h-10 rounded-full bg-google-blue-50 flex items-center justify-center mb-4 text-google-blue-600 group-hover:scale-110 transition-transform">
-            <Code2 className="w-5 h-5" />
+      <div className="mt-12 w-full grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_360px] gap-6 items-start">
+        <section className="border border-google-gray-200 bg-white rounded-xl shadow-sm overflow-hidden">
+          <div className="px-4 py-3 border-b border-google-gray-200 bg-google-gray-50 flex items-center justify-between">
+            <div className="flex items-center gap-2 font-semibold text-google-gray-800">
+              <GitBranch className="w-5 h-5 text-google-blue-600" />
+              Hosted Repositories
+            </div>
+            <span className="text-xs bg-google-gray-100 text-google-gray-700 font-semibold px-2 py-0.5 rounded-full">
+              {localRepos.length}
+            </span>
           </div>
-          <h3 className="font-semibold text-google-gray-800 mb-2 truncate group-hover:text-google-blue-600 transition-colors">
-            facebook/react
-          </h3>
-          <p className="text-sm text-google-gray-500 flex-1 leading-relaxed">
-            Explore the React UI library's source code, components, and
-            architecture.
-          </p>
-          <div className="mt-4 text-xs font-semibold text-google-gray-400 uppercase tracking-wider flex items-center">
-            <Github className="w-3.5 h-3.5 mr-1.5 opacity-70" /> GitHub
+          <div className="divide-y divide-google-gray-200">
+            {loadingRepos ? (
+              <div className="p-8 text-center text-google-gray-500">
+                Loading repositories...
+              </div>
+            ) : localRepos.length === 0 ? (
+              <div className="p-8 text-center text-google-gray-500">
+                No local repositories yet.
+              </div>
+            ) : (
+              localRepos.map((repo) => (
+                <button
+                  key={repo.full_name}
+                  onClick={() => onSearch(repo.full_name)}
+                  className="w-full p-4 text-left hover:bg-google-gray-50 transition-colors"
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="font-semibold text-google-blue-600 truncate">
+                        {repo.full_name}
+                      </div>
+                      <p className="mt-1 text-sm text-google-gray-500 line-clamp-2">
+                        {repo.description || "No description provided."}
+                      </p>
+                    </div>
+                    <div className="text-xs text-google-gray-500 shrink-0">
+                      {repo.default_branch}
+                    </div>
+                  </div>
+                </button>
+              ))
+            )}
           </div>
-        </div>
+        </section>
 
-        <div
-          className="bg-white border border-google-gray-200 p-6 rounded-2xl shadow-sm hover:shadow-md transition-shadow cursor-pointer text-left flex flex-col group"
-          onClick={() =>
-            onSearch("codeberg: https://codeberg.org/forgejo/forgejo")
-          }
-        >
-          <div className="w-10 h-10 rounded-full bg-google-green-50 flex items-center justify-center mb-4 text-google-green-600 group-hover:scale-110 transition-transform">
-            <GitBranch className="w-5 h-5" />
-          </div>
-          <h3 className="font-semibold text-google-gray-800 mb-2 line-clamp-1 group-hover:text-google-blue-600 transition-colors">
-            forgejo/forgejo
-          </h3>
-          <p className="text-sm text-google-gray-500 flex-1 leading-relaxed">
-            Beyond GitHub: view the codebase of Forgejo hosted on a community
-            instance.
-          </p>
-          <div className="mt-4 text-xs font-semibold text-google-gray-400 uppercase tracking-wider flex items-center">
-            <Package className="w-3.5 h-3.5 mr-1.5 opacity-70" /> Codeberg
-          </div>
-        </div>
-
-        <div
-          className="bg-white border border-google-gray-200 p-6 rounded-2xl shadow-sm hover:shadow-md transition-shadow cursor-pointer text-left flex flex-col group"
-          onClick={() => onSearch("gitea: https://gitea.com/gitea/go-sdk")}
-        >
-          <div className="w-10 h-10 rounded-full bg-[#fbbc04]/10 flex items-center justify-center mb-4 text-[#fbbc04] group-hover:scale-110 transition-transform">
-            <Package className="w-5 h-5" />
-          </div>
-          <h3 className="font-semibold text-google-gray-800 mb-2 truncate group-hover:text-google-blue-600 transition-colors">
-            gitea/go-sdk
-          </h3>
-          <p className="text-sm text-google-gray-500 flex-1 leading-relaxed">
-            Check out Gitea's Go SDK repository hosted natively on their own
-            instance.
-          </p>
-          <div className="mt-4 text-xs font-semibold text-google-gray-400 uppercase tracking-wider flex items-center">
-            <Package className="w-3.5 h-3.5 mr-1.5 opacity-70" /> Gitea
-          </div>
-        </div>
+        <CreateRepositoryForm
+          adminToken={adminToken}
+          onAdminTokenChange={onAdminTokenChange}
+          onCreated={(owner, repo) => {
+            loadRepos();
+            onSearch(`${owner}/${repo}`);
+          }}
+        />
       </div>
 
-      <div className="mt-20 text-center w-full">
+      <div className="mt-12 text-center w-full">
         <h3 className="text-xs uppercase tracking-widest text-google-gray-400 font-semibold mb-6">
-          Supported Platforms
+          Read-Only External Browsing
         </h3>
-        <div className="flex flex-wrap items-center justify-center gap-x-10 gap-y-6 opacity-50 grayscale hover:grayscale-0 transition-all duration-500">
-          <div className="font-bold text-lg md:text-xl tracking-tight text-google-gray-700 flex items-center hover:text-black transition-colors">
-            <Github className="w-5 h-5 md:w-6 md:h-6 mr-2" /> GitHub
-          </div>
-          <div className="font-bold text-lg md:text-xl tracking-tight text-google-gray-700 hover:text-black transition-colors flex items-center">
-            <Package className="w-5 h-5 md:w-6 md:h-6 mr-2" /> Gitea
-          </div>
-          <div className="font-bold text-lg md:text-xl tracking-tight text-google-gray-700 hover:text-black transition-colors flex items-center">
-            <GitBranch className="w-5 h-5 md:w-6 md:h-6 mr-2" /> Forgejo
-          </div>
-          <div className="font-bold text-lg md:text-xl tracking-tight text-google-gray-700 hover:text-black transition-colors flex items-center">
-            <Code2 className="w-5 h-5 md:w-6 md:h-6 mr-2" /> Codeberg
-          </div>
+        <div className="flex flex-wrap items-center justify-center gap-3">
+          <button
+            onClick={() => onSearch("github: facebook/react")}
+            className="inline-flex items-center rounded-full border border-google-gray-200 bg-white px-4 py-2 text-sm font-semibold text-google-gray-700 hover:bg-google-gray-50"
+          >
+            <Github className="w-4 h-4 mr-2" /> GitHub
+          </button>
+          <button
+            onClick={() => onSearch("codeberg: https://codeberg.org/forgejo/forgejo")}
+            className="inline-flex items-center rounded-full border border-google-gray-200 bg-white px-4 py-2 text-sm font-semibold text-google-gray-700 hover:bg-google-gray-50"
+          >
+            <Package className="w-4 h-4 mr-2" /> Codeberg
+          </button>
+          <button
+            onClick={() => onSearch("gitea: https://gitea.com/gitea/go-sdk")}
+            className="inline-flex items-center rounded-full border border-google-gray-200 bg-white px-4 py-2 text-sm font-semibold text-google-gray-700 hover:bg-google-gray-50"
+          >
+            <Package className="w-4 h-4 mr-2" /> Gitea
+          </button>
         </div>
       </div>
     </motion.div>
@@ -1371,10 +1539,80 @@ const FileRow = ({
   </button>
 );
 
+const BranchSelector = ({
+  repoOwner,
+  repoName,
+  apiUrl,
+  currentRef,
+  fallbackRef,
+  onRefChange,
+}: {
+  repoOwner: string;
+  repoName: string;
+  apiUrl: string;
+  currentRef: string;
+  fallbackRef: string;
+  onRefChange: (ref: string) => void;
+}) => {
+  const [open, setOpen] = useState(false);
+  const [branches, setBranches] = useState<any[]>([]);
+  const activeRef = currentRef || fallbackRef || "main";
+
+  useEffect(() => {
+    fetchJson(`${apiUrl}/repos/${repoOwner}/${repoName}/branches`)
+      .then((data) => setBranches(Array.isArray(data) ? data : []))
+      .catch(() => setBranches([]));
+  }, [repoOwner, repoName, apiUrl]);
+
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setOpen((value) => !value)}
+        className="flex items-center px-3 py-1.5 bg-google-gray-50 border border-google-gray-200 rounded-md text-sm font-medium text-google-gray-800 hover:bg-google-gray-100 transition-colors"
+      >
+        <GitBranch className="w-4 h-4 mr-2 text-google-gray-500" />
+        <span className="max-w-[180px] truncate">{activeRef}</span>
+        <ChevronDown className="w-4 h-4 ml-1 text-google-gray-500" />
+      </button>
+      {open && (
+        <div className="absolute left-0 top-10 z-40 w-72 rounded-md border border-google-gray-200 bg-white shadow-lg overflow-hidden">
+          <div className="px-3 py-2 text-xs font-semibold uppercase tracking-wide text-google-gray-500 bg-google-gray-50 border-b border-google-gray-200">
+            Branches
+          </div>
+          <div className="max-h-72 overflow-y-auto">
+            {branches.length === 0 ? (
+              <div className="px-3 py-4 text-sm text-google-gray-500">
+                No branches found.
+              </div>
+            ) : (
+              branches.map((branch) => (
+                <button
+                  key={branch.name}
+                  onClick={() => {
+                    onRefChange(branch.name);
+                    setOpen(false);
+                  }}
+                  className="w-full px-3 py-2 text-left text-sm text-google-gray-800 hover:bg-google-gray-50 flex items-center justify-between gap-3"
+                >
+                  <span className="truncate">{branch.name}</span>
+                  {branch.name === activeRef && (
+                    <Check className="w-4 h-4 text-google-green-600 shrink-0" />
+                  )}
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const MainContent = ({
   repoOwner,
   repoName,
   currentPath,
+  currentRef,
   repoData,
   contents,
   commit,
@@ -1386,10 +1624,12 @@ const MainContent = ({
   onProfileClick,
   apiUrl,
   onTabChange,
+  onRefChange,
 }: {
   repoOwner: string;
   repoName: string;
   currentPath: string;
+  currentRef: string;
   repoData: any;
   contents: any[];
   commit: any;
@@ -1401,6 +1641,7 @@ const MainContent = ({
   onProfileClick: (username: string) => void;
   apiUrl: string;
   onTabChange: (tab: string) => void;
+  onRefChange: (ref: string) => void;
 }) => {
   const commitMsg = commit?.commit?.message
     ? commit.commit.message.split("\n")[0]
@@ -1409,6 +1650,11 @@ const MainContent = ({
   const commitDate = commit?.commit?.author?.date
     ? new Date(commit.commit.author.date).toLocaleDateString()
     : "";
+  const cloneUrl =
+    repoData?.clone_url ||
+    (apiUrl === LOCAL_API_URL
+      ? `${window.location.origin}/${repoOwner}/${repoName}.git`
+      : `https://github.com/${repoOwner}/${repoName}.git`);
 
   return (
     <motion.main
@@ -1480,11 +1726,14 @@ const MainContent = ({
 
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mt-6 mb-4">
             <div className="flex items-center gap-2 flex-wrap">
-              <button className="flex items-center px-3 py-1.5 bg-google-gray-50 border border-google-gray-200 rounded-md text-sm font-medium text-google-gray-800 hover:bg-google-gray-100 transition-colors">
-                <GitBranch className="w-4 h-4 mr-2 text-google-gray-500" />
-                {repoData?.default_branch || "main"}
-                <ChevronDown className="w-4 h-4 ml-1 text-google-gray-500" />
-              </button>
+              <BranchSelector
+                repoOwner={repoOwner}
+                repoName={repoName}
+                apiUrl={apiUrl}
+                currentRef={currentRef}
+                fallbackRef={repoData?.default_branch || "main"}
+                onRefChange={onRefChange}
+              />
             </div>
 
             <div className="flex flex-wrap items-center gap-2 relative">
@@ -1514,24 +1763,24 @@ const MainContent = ({
                     <input
                       type="text"
                       readOnly
-                      value={
-                        repoData?.clone_url ||
-                        `https://github.com/${repoOwner}/${repoName}.git`
-                      }
+                      value={cloneUrl}
                       className="flex-1 bg-transparent text-xs p-2 outline-none text-google-gray-800"
                     />
                     <button
                       onClick={() =>
-                        navigator.clipboard.writeText(
-                          repoData?.clone_url ||
-                            `https://github.com/${repoOwner}/${repoName}.git`,
-                        )
+                        navigator.clipboard.writeText(cloneUrl)
                       }
                       className="px-2 py-2 hover:bg-google-gray-200 transition-colors"
                     >
                       <Book className="w-4 h-4 text-google-gray-600" />
                     </button>
                   </div>
+                  {apiUrl === LOCAL_API_URL && (
+                    <p className="text-xs text-google-gray-500 leading-relaxed">
+                      Pushes use HTTP Basic auth. Use any username and the
+                      configured admin token as the password.
+                    </p>
+                  )}
                 </div>
               </div>
             </div>
@@ -2103,6 +2352,7 @@ export default function App() {
   const [repoOwner, setRepoOwner] = useState("");
   const [repoName, setRepoName] = useState("");
   const [currentPath, setCurrentPath] = useState("");
+  const [currentRef, setCurrentRef] = useState("");
   const [activeTab, setActiveTab] = useState("code");
 
   const [historyStack, setHistoryStack] = useState<any[]>([]);
@@ -2116,6 +2366,7 @@ export default function App() {
         repoName,
         profileUsername,
         currentPath,
+        currentRef,
         activeTab,
       },
     ]);
@@ -2130,12 +2381,16 @@ export default function App() {
       setRepoName(last.repoName);
       setProfileUsername(last.profileUsername);
       setCurrentPath(last.currentPath);
+      setCurrentRef(last.currentRef || "");
       setActiveTab(last.activeTab);
       return prev.slice(0, prev.length - 1);
     });
   };
 
-  const [apiUrl, setApiUrl] = useState("https://api.github.com");
+  const [apiUrl, setApiUrl] = useState(LOCAL_API_URL);
+  const [adminToken, setAdminToken] = useState(() =>
+    window.localStorage.getItem("googleHubAdminToken") || "",
+  );
   const [repoData, setRepoData] = useState<any>(null);
   const [contents, setContents] = useState<any[]>([]);
   const [commit, setCommit] = useState<any>(null);
@@ -2145,6 +2400,7 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
 
   const fetchRepoData = () => {
+    if (!repoOwner || !repoName) return;
     setRepoData(null);
     setCommit(null);
     setReleases([]);
@@ -2155,13 +2411,17 @@ export default function App() {
           setRepoData({ description: "Repository not found or API error." });
         } else {
           setRepoData(data);
+          setCurrentRef((existing) => existing || data.default_branch || "main");
         }
       })
       .catch(() =>
         setRepoData({ description: "Could not load repository data." }),
       );
 
-    fetchJson(`${apiUrl}/repos/${repoOwner}/${repoName}/commits?per_page=1`)
+    const commitUrl = `${apiUrl}/repos/${repoOwner}/${repoName}/commits?per_page=1${
+      currentRef ? `&sha=${encodeURIComponent(currentRef)}` : ""
+    }`;
+    fetchJson(commitUrl)
       .then((data) => {
         if (Array.isArray(data) && data.length > 0) {
           setCommit(data[0]);
@@ -2188,17 +2448,20 @@ export default function App() {
   };
 
   useEffect(() => {
+    if (!repoOwner || !repoName) return;
     fetchRepoData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [repoOwner, repoName, apiUrl]);
+  }, [repoOwner, repoName, apiUrl, currentRef]);
 
   useEffect(() => {
+    if (!repoOwner || !repoName) return;
     setIsLoading(true);
     setFileContent(null);
     setReadmeContent(null);
+    const refQuery = currentRef ? `?ref=${encodeURIComponent(currentRef)}` : "";
     const url = currentPath
-      ? `${apiUrl}/repos/${repoOwner}/${repoName}/contents/${currentPath}`
-      : `${apiUrl}/repos/${repoOwner}/${repoName}/contents`;
+      ? `${apiUrl}/repos/${repoOwner}/${repoName}/contents/${currentPath}${refQuery}`
+      : `${apiUrl}/repos/${repoOwner}/${repoName}/contents${refQuery}`;
 
     fetchJson(url)
       .then((data) => {
@@ -2212,11 +2475,7 @@ export default function App() {
             (d: any) => d.name.toLowerCase() === "readme.md",
           );
           if (readmeFile && readmeFile.download_url) {
-            const proxiedReadmeUrl = `/api/proxy?url=${encodeURIComponent(readmeFile.download_url)}`;
-            fetch(proxiedReadmeUrl)
-              .then((r) =>
-                r.ok ? r.text() : Promise.reject(new Error("Bad text status")),
-              )
+            fetchText(readmeFile.download_url)
               .then((text) => setReadmeContent(text))
               .catch(() => setReadmeContent(null));
           } else {
@@ -2226,7 +2485,7 @@ export default function App() {
           // Decode content
           if (data.content && data.encoding === "base64") {
             try {
-              const text = atob(data.content);
+              const text = decodeBase64Utf8(data.content);
               setFileContent(text);
             } catch (e) {
               setFileContent("Error decoding file contents.");
@@ -2247,18 +2506,34 @@ export default function App() {
         setFileContent("Error loading contents.");
         setIsLoading(false);
       });
-  }, [repoOwner, repoName, currentPath, apiUrl]);
+  }, [repoOwner, repoName, currentPath, currentRef, apiUrl]);
+
+  useEffect(() => {
+    window.localStorage.setItem("googleHubAdminToken", adminToken);
+  }, [adminToken]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const repoParam = params.get("repo");
+    const userParam = params.get("user");
+    if (repoParam) {
+      handleSearch(repoParam);
+    } else if (userParam) {
+      handleSearch(userParam);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleSearch = (val: string) => {
     pushHistory();
     let owner = val;
     let repo = "";
-    let currApiUrl = "https://api.github.com";
+    let currApiUrl = LOCAL_API_URL;
     let searchVal = val.trim();
 
     try {
       const match = searchVal.match(
-        /^(gitea|forgejo|codeberg|gitlab|github):\s*(.+)$/i,
+        /^(local|self|gitea|forgejo|codeberg|gitlab|github):\s*(.+)$/i,
       );
 
       if (match) {
@@ -2266,7 +2541,12 @@ export default function App() {
         const rest = match[2];
         const isHttp = rest.startsWith("http");
 
-        if (isHttp) {
+        if (provider === "local" || provider === "self") {
+          const parts = rest.split("/").filter(Boolean);
+          owner = parts[0] || owner;
+          repo = parts[1] || repo;
+          currApiUrl = LOCAL_API_URL;
+        } else if (isHttp) {
           const url = new URL(rest);
           const parts = url.pathname.split("/").filter(Boolean);
           owner = parts[0] || owner;
@@ -2288,15 +2568,21 @@ export default function App() {
         }
       } else if (searchVal.startsWith("http")) {
         const url = new URL(searchVal);
-        const parts = url.pathname.split("/").filter(Boolean);
+        const localRepo = url.searchParams.get("repo");
+        const localUser = url.searchParams.get("user");
+        const parts = (localRepo || url.pathname).split("/").filter(Boolean);
         if (parts.length >= 2) {
           owner = parts[0];
           repo = parts[1];
+        } else if (localUser) {
+          owner = localUser;
         } else if (parts.length === 1) {
           owner = parts[0];
         }
 
-        if (url.hostname === "github.com") {
+        if (url.origin === window.location.origin) {
+          currApiUrl = LOCAL_API_URL;
+        } else if (url.hostname === "github.com") {
           currApiUrl = "https://api.github.com";
         } else if (url.hostname === "gitlab.com") {
           currApiUrl = "https://gitlab.com/api/v4";
@@ -2324,6 +2610,7 @@ export default function App() {
       setRepoOwner(owner);
       setRepoName(repo);
       setCurrentPath("");
+      setCurrentRef("");
       setActiveTab("code");
       setViewMode("repo");
     } else if (owner && !repo) {
@@ -2343,6 +2630,7 @@ export default function App() {
           setRepoName("");
           setProfileUsername("");
           setCurrentPath("");
+          setCurrentRef("");
         }}
         repoOwner={repoOwner}
         onAvatarClick={() => {
@@ -2378,7 +2666,12 @@ export default function App() {
         <div className="flex-1 overflow-x-hidden overflow-y-auto w-full self-stretch align-top flex flex-col relative">
           <AnimatePresence mode="wait">
             {viewMode === "home" ? (
-              <LandingPage key="home" onSearch={handleSearch} />
+              <LandingPage
+                key="home"
+                onSearch={handleSearch}
+                adminToken={adminToken}
+                onAdminTokenChange={setAdminToken}
+              />
             ) : viewMode === "user" ? (
               <UserProfileView
                 key="user-profile"
@@ -2389,6 +2682,7 @@ export default function App() {
                   setRepoOwner(o);
                   setRepoName(r);
                   setCurrentPath("");
+                  setCurrentRef("");
                   setActiveTab("code");
                   setViewMode("repo");
                 }}
@@ -2399,6 +2693,7 @@ export default function App() {
                 repoOwner={repoOwner}
                 repoName={repoName}
                 currentPath={currentPath}
+                currentRef={currentRef}
                 repoData={repoData}
                 contents={contents}
                 commit={commit}
@@ -2408,6 +2703,10 @@ export default function App() {
                 isLoading={isLoading}
                 apiUrl={apiUrl}
                 onNavigate={(path) => setCurrentPath(path)}
+                onRefChange={(ref) => {
+                  setCurrentPath("");
+                  setCurrentRef(ref);
+                }}
                 onProfileClick={(uname) => {
                   pushHistory();
                   setProfileUsername(uname);
@@ -2510,12 +2809,12 @@ export default function App() {
           </AnimatePresence>
           <footer className="w-full mt-auto py-6 px-4 md:px-8 border-t border-google-gray-200 bg-google-gray-50 text-center flex flex-col items-center justify-center gap-2">
             <p className="text-google-gray-500 text-sm">
-              <strong className="text-google-gray-700">Disclaimer:</strong> This
-              is a custom UI instance connecting to public APIs. It is not
-              affiliated with GitHub, Gitea, or Google.
+              <strong className="text-google-gray-700">Google Hub:</strong> A
+              lightweight custom Git instance with optional read-only browsing
+              for external forges.
             </p>
             <p className="text-google-gray-500 text-sm flex items-center">
-              Made with <span className="mx-1 text-google-red-500">❤️</span> by{" "}
+              Maintained by{" "}
               <a
                 href="https://github.com/m4rcel-lol"
                 target="_blank"
