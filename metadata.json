@@ -1,6 +1,0 @@
-{
-  "name": "Google Hub Git",
-  "description": "A lightweight custom Git instance with repository creation, smart HTTP clone and push, code browsing, and Docker Compose deployment.",
-  "requestFramePermissions": [],
-  "majorCapabilities": []
-}

@@ -6,7 +6,7 @@ services:
       NODE_ENV: production
       PORT: 3000
       GIT_ROOT: /data/repositories
-      ADMIN_TOKEN: ${ADMIN_TOKEN:?set ADMIN_TOKEN in .env}
+      CONFIG_ROOT: /data/config
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost}
     volumes:
       - google_hub_data:/data

@@ -5,11 +5,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const port = 31987;
-const adminToken = "smoke-test-token";
+const adminUsername = "admin";
+const adminPassword = "smoke-test-password";
 const baseUrl = `http://127.0.0.1:${port}`;
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "google-hub-git-"));
 const gitRoot = path.join(root, "repositories");
+const configRoot = path.join(root, "config");
 const workRoot = path.join(root, "work");
 const cloneRoot = path.join(root, "clone");
 
@@ -63,8 +65,8 @@ const server = spawn("npx", ["tsx", "server.ts"], {
     ...process.env,
     NODE_ENV: "production",
     PORT: String(port),
-    ADMIN_TOKEN: adminToken,
     GIT_ROOT: gitRoot,
+    CONFIG_ROOT: configRoot,
     PUBLIC_BASE_URL: baseUrl,
   },
   stdio: ["ignore", "pipe", "pipe"],
@@ -81,10 +83,19 @@ server.stderr.on("data", (chunk) => {
 try {
   await waitForServer();
 
+  await run("npx", ["tsx", "scripts/admin-user.ts", "create"], {
+    cwd: path.resolve(testDir, ".."),
+    env: {
+      ADMIN_USERNAME: adminUsername,
+      ADMIN_PASSWORD: adminPassword,
+      CONFIG_ROOT: configRoot,
+    },
+  });
+
   const createResponse = await fetch(`${baseUrl}/api/v1/repos`, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${adminToken}`,
+      Authorization: `Basic ${Buffer.from(`${adminUsername}:${adminPassword}`).toString("base64")}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
@@ -112,7 +123,7 @@ try {
       "remote",
       "add",
       "origin",
-      `http://admin:${adminToken}@127.0.0.1:${port}/main/smoke.git`,
+      `http://${adminUsername}:${adminPassword}@127.0.0.1:${port}/main/smoke.git`,
     ],
     { cwd: workRoot },
   );

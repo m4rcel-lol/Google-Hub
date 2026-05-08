@@ -7,11 +7,16 @@ import cors from "cors";
 import express, { type NextFunction, type Request, type Response } from "express";
 import { createServer as createViteServer } from "vite";
 
+import {
+  getUserStorePath,
+  hasAdminUser,
+  verifyAdminCredentials,
+} from "./src/server/userStore.ts";
+
 const PORT = Number.parseInt(process.env.PORT || "3000", 10);
 const GIT_ROOT = path.resolve(
   process.env.GIT_ROOT || path.join(process.cwd(), "data", "repositories"),
 );
-const ADMIN_TOKEN = process.env.ADMIN_TOKEN || "";
 const MAX_API_BLOB_BYTES = Number.parseInt(
   process.env.MAX_API_BLOB_BYTES || `${1024 * 1024}`,
   10,
@@ -161,35 +166,39 @@ async function assertRepoExists(ref: RepositoryRef): Promise<void> {
   }
 }
 
-function isAdminRequest(req: Request): boolean {
-  if (!ADMIN_TOKEN) return false;
-
+function basicCredentials(req: Request) {
   const header = req.get("authorization") || "";
-  if (header.startsWith("Bearer ")) {
-    return header.slice("Bearer ".length).trim() === ADMIN_TOKEN;
-  }
+  if (!header.startsWith("Basic ")) return null;
 
-  if (header.startsWith("Basic ")) {
-    try {
-      const decoded = Buffer.from(header.slice("Basic ".length), "base64")
-        .toString("utf8")
-        .split(":");
-      return decoded.slice(1).join(":") === ADMIN_TOKEN;
-    } catch {
-      return false;
-    }
+  try {
+    const decoded = Buffer.from(header.slice("Basic ".length), "base64").toString(
+      "utf8",
+    );
+    const separator = decoded.indexOf(":");
+    if (separator === -1) return null;
+    return {
+      username: decoded.slice(0, separator),
+      password: decoded.slice(separator + 1),
+    };
+  } catch {
+    return null;
   }
-
-  return req.get("x-admin-token") === ADMIN_TOKEN;
 }
 
-function requireAdmin(req: Request): void {
-  if (isAdminRequest(req)) return;
+async function isAdminRequest(req: Request): Promise<boolean> {
+  const credentials = basicCredentials(req);
+  if (!credentials) return false;
+  return verifyAdminCredentials(credentials.username, credentials.password);
+}
+
+async function requireAdmin(req: Request): Promise<void> {
+  if (await isAdminRequest(req)) return;
+  const adminExists = await hasAdminUser();
   throw new HttpError(
-    ADMIN_TOKEN ? 401 : 503,
-    ADMIN_TOKEN
-      ? "Admin token required."
-      : "Repository writes are disabled because ADMIN_TOKEN is not configured.",
+    adminExists ? 401 : 503,
+    adminExists
+      ? "Admin username and password required."
+      : "No admin user exists. Create one inside the container with npm run admin:create.",
   );
 }
 
@@ -581,12 +590,12 @@ function isGitWrite(req: Request): boolean {
   );
 }
 
-function sendAuthChallenge(res: Response): void {
+function sendAuthChallenge(res: Response, message: string): void {
   res.set("WWW-Authenticate", 'Basic realm="Google Hub Git"');
-  res.status(401).send("Authentication required for Git pushes.\n");
+  res.status(401).send(`${message}\n`);
 }
 
-function handleGitHttp(req: Request, res: Response): void {
+async function handleGitHttp(req: Request, res: Response): Promise<void> {
   let ref: RepositoryRef;
   try {
     ref = repositoryFromParams(req);
@@ -594,8 +603,13 @@ function handleGitHttp(req: Request, res: Response): void {
       res.status(404).send("Repository not found.\n");
       return;
     }
-    if (isGitWrite(req) && !isAdminRequest(req)) {
-      sendAuthChallenge(res);
+    if (isGitWrite(req) && !(await isAdminRequest(req))) {
+      sendAuthChallenge(
+        res,
+        (await hasAdminUser())
+          ? "Admin username and password required for Git pushes."
+          : "No admin user exists. Create one inside the container first.",
+      );
       return;
     }
   } catch (error) {
@@ -607,6 +621,7 @@ function handleGitHttp(req: Request, res: Response): void {
   const query = req.originalUrl.includes("?")
     ? req.originalUrl.slice(req.originalUrl.indexOf("?") + 1)
     : "";
+  const credentials = basicCredentials(req);
   const child = spawn("git", ["http-backend"], {
     env: {
       ...process.env,
@@ -617,7 +632,7 @@ function handleGitHttp(req: Request, res: Response): void {
       QUERY_STRING: query,
       CONTENT_TYPE: req.get("content-type") || "",
       CONTENT_LENGTH: req.get("content-length") || "",
-      REMOTE_USER: isAdminRequest(req) ? "admin" : "",
+      REMOTE_USER: credentials?.username || "",
       REMOTE_ADDR: req.ip,
     },
     stdio: ["pipe", "pipe", "pipe"],
@@ -687,12 +702,21 @@ function writeCgiHeaders(res: Response, headerBlock: string): void {
 }
 
 function registerApiRoutes(app: express.Express): void {
-  app.get("/api/v1/health", (_req, res) => {
+  app.get("/api/v1/health", async (_req, res, next) => {
+    let adminReady = false;
+    try {
+      adminReady = await hasAdminUser();
+    } catch (error) {
+      next(error);
+      return;
+    }
     res.json({
       ok: true,
       service: "google-hub-git",
       git_root: GIT_ROOT,
-      writes_enabled: Boolean(ADMIN_TOKEN),
+      user_store: getUserStorePath(),
+      admin_ready: adminReady,
+      writes_enabled: adminReady,
     });
   });
 
@@ -714,7 +738,7 @@ function registerApiRoutes(app: express.Express): void {
   app.post(
     "/api/v1/repos",
     asyncRoute(async (req, res) => {
-      requireAdmin(req);
+      await requireAdmin(req);
       const owner = validateSlug("owner", req.body?.owner);
       const repo = validateSlug("repository", req.body?.name);
       const description =
@@ -979,8 +1003,18 @@ async function startServer() {
   await fs.mkdir(GIT_ROOT, { recursive: true });
   app.set("trust proxy", true);
   app.use(cors());
-  app.all("/:owner/:repo.git", handleGitHttp);
-  app.all("/:owner/:repo.git/*", handleGitHttp);
+  app.all(
+    "/:owner/:repo.git",
+    asyncRoute(async (req, res) => {
+      await handleGitHttp(req, res);
+    }),
+  );
+  app.all(
+    "/:owner/:repo.git/*",
+    asyncRoute(async (req, res) => {
+      await handleGitHttp(req, res);
+    }),
+  );
   app.use(express.json({ limit: JSON_LIMIT }));
 
   registerApiRoutes(app);
@@ -991,7 +1025,7 @@ async function startServer() {
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Google Hub Git running on http://localhost:${PORT}`);
     console.log(`Git repositories: ${GIT_ROOT}`);
-    console.log(`Repository writes: ${ADMIN_TOKEN ? "enabled" : "disabled"}`);
+    console.log(`Admin users file: ${getUserStorePath()}`);
   });
 }
 

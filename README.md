@@ -10,7 +10,8 @@ It is intentionally smaller than Forgejo: no database, no background workers, no
 - Clone and push over standard Git HTTPS endpoints: `https://host/owner/repo.git`.
 - Browse local repositories through a Gitea/GitHub-like REST API.
 - Persist repositories as bare Git directories under `GIT_ROOT`.
-- Protect repository creation and pushes with one `ADMIN_TOKEN`.
+- Start with no admin account; create the first admin from inside the container.
+- Protect repository creation and pushes with admin username/password auth.
 - Deploy with Docker Compose and Caddy.
 - Optionally browse GitHub/Gitea/Forgejo/Codeberg repositories in read-only mode.
 
@@ -29,24 +30,31 @@ npm run dev
 
 Open `http://localhost:3000`.
 
-For local writes, set `ADMIN_TOKEN` before starting:
+Create the first local admin user before creating repositories:
 
 ```bash
-ADMIN_TOKEN="$(openssl rand -base64 32)" npm run dev
+ADMIN_USERNAME=admin ADMIN_PASSWORD="$(openssl rand -base64 24)" npm run admin:create
 ```
 
 ## Docker Compose
 
 ```bash
 cp .env.example .env
-# edit ADMIN_TOKEN before starting
 docker compose up --build -d
+```
+
+The instance starts without any write-capable account. Create the first admin user with `docker compose exec`:
+
+```bash
+docker compose exec \
+  -e ADMIN_USERNAME=admin \
+  -e ADMIN_PASSWORD="$(openssl rand -base64 24)" \
+  google-hub npm run admin:create
 ```
 
 Local Caddy defaults to `http://localhost`. For production:
 
 ```env
-ADMIN_TOKEN=replace-with-a-long-random-secret
 SITE_ADDRESS=git.example.com
 PUBLIC_BASE_URL=https://git.example.com
 ```
@@ -66,10 +74,10 @@ git commit -m "Initial commit"
 git push origin main
 ```
 
-Push authentication uses HTTP Basic auth. Use any username and `ADMIN_TOKEN` as the password. A non-interactive push URL also works:
+Push authentication uses HTTP Basic auth with the admin username and password created by `npm run admin:create`. A non-interactive push URL also works:
 
 ```bash
-git remote set-url origin http://admin:YOUR_ADMIN_TOKEN@localhost/main/project.git
+git remote set-url origin http://admin:YOUR_ADMIN_PASSWORD@localhost/main/project.git
 git push origin main
 ```
 
@@ -85,7 +93,7 @@ Create a repository:
 
 ```bash
 curl -X POST http://localhost/api/v1/repos \
-  -H "Authorization: Bearer YOUR_ADMIN_TOKEN" \
+  -u admin:YOUR_ADMIN_PASSWORD \
   -H "Content-Type: application/json" \
   -d '{"owner":"main","name":"project","description":"Example repo"}'
 ```

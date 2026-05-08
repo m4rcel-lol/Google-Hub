@@ -63,10 +63,12 @@ const requestUrl = (url: string) => {
   return `/api/proxy?url=${encodeURIComponent(url)}`;
 };
 
-const authHeaders = (adminToken: string) =>
-  adminToken.trim()
-    ? { Authorization: `Bearer ${adminToken.trim()}` }
-    : {};
+const basicAuthHeaders = (username: string, password: string) => {
+  if (!username.trim() || !password) return {};
+  const value = new TextEncoder().encode(`${username.trim()}:${password}`);
+  const binary = Array.from(value, (byte) => String.fromCharCode(byte)).join("");
+  return { Authorization: `Basic ${btoa(binary)}` };
+};
 
 const fetchJson = async (url: string, init: RequestInit = {}) => {
   const proxiedUrl = requestUrl(url);
@@ -118,12 +120,16 @@ const GoogleLogo = () => (
 );
 
 const CreateRepositoryForm = ({
-  adminToken,
-  onAdminTokenChange,
+  adminUsername,
+  adminPassword,
+  onAdminUsernameChange,
+  onAdminPasswordChange,
   onCreated,
 }: {
-  adminToken: string;
-  onAdminTokenChange: (value: string) => void;
+  adminUsername: string;
+  adminPassword: string;
+  onAdminUsernameChange: (value: string) => void;
+  onAdminPasswordChange: (value: string) => void;
   onCreated: (owner: string, repo: string) => void;
 }) => {
   const [owner, setOwner] = useState("main");
@@ -142,7 +148,7 @@ const CreateRepositoryForm = ({
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          ...authHeaders(adminToken),
+          ...basicAuthHeaders(adminUsername, adminPassword),
         },
         body: JSON.stringify({
           owner: owner.trim(),
@@ -206,11 +212,23 @@ const CreateRepositoryForm = ({
       </label>
       <label className="block mt-3">
         <span className="text-xs font-semibold text-google-gray-500 uppercase tracking-wide">
-          Admin Token
+          Admin Username
         </span>
         <input
-          value={adminToken}
-          onChange={(event) => onAdminTokenChange(event.target.value)}
+          value={adminUsername}
+          onChange={(event) => onAdminUsernameChange(event.target.value)}
+          autoComplete="username"
+          placeholder="admin"
+          className="mt-1 w-full rounded-md border border-google-gray-200 bg-google-gray-50 px-3 py-2 text-sm text-google-gray-800 outline-none focus:border-google-blue-600"
+        />
+      </label>
+      <label className="block mt-3">
+        <span className="text-xs font-semibold text-google-gray-500 uppercase tracking-wide">
+          Admin Password
+        </span>
+        <input
+          value={adminPassword}
+          onChange={(event) => onAdminPasswordChange(event.target.value)}
           type="password"
           autoComplete="current-password"
           className="mt-1 w-full rounded-md border border-google-gray-200 bg-google-gray-50 px-3 py-2 text-sm text-google-gray-800 outline-none focus:border-google-blue-600"
@@ -231,12 +249,16 @@ const CreateRepositoryForm = ({
 
 const LandingPage = ({
   onSearch,
-  adminToken,
-  onAdminTokenChange,
+  adminUsername,
+  adminPassword,
+  onAdminUsernameChange,
+  onAdminPasswordChange,
 }: {
   onSearch: (val: string) => void;
-  adminToken: string;
-  onAdminTokenChange: (value: string) => void;
+  adminUsername: string;
+  adminPassword: string;
+  onAdminUsernameChange: (value: string) => void;
+  onAdminPasswordChange: (value: string) => void;
 }) => {
   const [val, setVal] = useState("");
   const [localRepos, setLocalRepos] = useState<any[]>([]);
@@ -355,8 +377,10 @@ const LandingPage = ({
         </section>
 
         <CreateRepositoryForm
-          adminToken={adminToken}
-          onAdminTokenChange={onAdminTokenChange}
+          adminUsername={adminUsername}
+          adminPassword={adminPassword}
+          onAdminUsernameChange={onAdminUsernameChange}
+          onAdminPasswordChange={onAdminPasswordChange}
           onCreated={(owner, repo) => {
             loadRepos();
             onSearch(`${owner}/${repo}`);
@@ -1777,8 +1801,8 @@ const MainContent = ({
                   </div>
                   {apiUrl === LOCAL_API_URL && (
                     <p className="text-xs text-google-gray-500 leading-relaxed">
-                      Pushes use HTTP Basic auth. Use any username and the
-                      configured admin token as the password.
+                      Pushes use HTTP Basic auth with an admin username and
+                      password created inside the container.
                     </p>
                   )}
                 </div>
@@ -2388,9 +2412,10 @@ export default function App() {
   };
 
   const [apiUrl, setApiUrl] = useState(LOCAL_API_URL);
-  const [adminToken, setAdminToken] = useState(() =>
-    window.localStorage.getItem("googleHubAdminToken") || "",
+  const [adminUsername, setAdminUsername] = useState(() =>
+    window.localStorage.getItem("googleHubAdminUsername") || "",
   );
+  const [adminPassword, setAdminPassword] = useState("");
   const [repoData, setRepoData] = useState<any>(null);
   const [contents, setContents] = useState<any[]>([]);
   const [commit, setCommit] = useState<any>(null);
@@ -2509,8 +2534,8 @@ export default function App() {
   }, [repoOwner, repoName, currentPath, currentRef, apiUrl]);
 
   useEffect(() => {
-    window.localStorage.setItem("googleHubAdminToken", adminToken);
-  }, [adminToken]);
+    window.localStorage.setItem("googleHubAdminUsername", adminUsername);
+  }, [adminUsername]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -2669,8 +2694,10 @@ export default function App() {
               <LandingPage
                 key="home"
                 onSearch={handleSearch}
-                adminToken={adminToken}
-                onAdminTokenChange={setAdminToken}
+                adminUsername={adminUsername}
+                adminPassword={adminPassword}
+                onAdminUsernameChange={setAdminUsername}
+                onAdminPasswordChange={setAdminPassword}
               />
             ) : viewMode === "user" ? (
               <UserProfileView
